@@ -289,6 +289,12 @@ def _create_ngram_worker(**kwargs: Any) -> Any:
     return NGRAMWorker(**kwargs)
 
 
+def _create_suffix_worker(**kwargs: Any) -> Any:
+    from sglang.srt.speculative.suffix_worker import SuffixWorker
+
+    return SuffixWorker(**kwargs)
+
+
 # Register built-in algorithms.
 # Third-party integrations should import `SpeculativeAlgorithm` and either
 # call `register_speculative_algorithm` or use the helpers below to attach
@@ -318,6 +324,12 @@ register_speculative_algorithm(
     "NGRAM",
     worker_cls=_create_ngram_worker,
     flags=("NGRAM",),
+)
+
+register_speculative_algorithm(
+    "SUFFIX",
+    worker_cls=_create_suffix_worker,
+    flags=("SUFFIX",),
 )
 
 

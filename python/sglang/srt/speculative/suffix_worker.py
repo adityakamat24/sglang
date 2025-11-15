@@ -440,19 +440,3 @@ class SuffixWorker:
             num_accepted_tokens=num_accepted_tokens,
             can_run_cuda_graph=can_run_cuda_graph,
         )
-
-
-# Register the worker
-def _create_suffix_worker(**kwargs) -> SuffixWorker:
-    """Factory function to create SuffixWorker instance."""
-    return SuffixWorker(**kwargs)
-
-
-# Register at module level
-from sglang.srt.speculative.spec_info import register_speculative_algorithm
-
-SUFFIX = register_speculative_algorithm(
-    "SUFFIX",
-    worker_cls=_create_suffix_worker,
-    flags=("SUFFIX",),
-)
