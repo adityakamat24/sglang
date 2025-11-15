@@ -8,6 +8,7 @@ This test suite validates the suffix decoding implementation including:
 - Integration with different attention backends
 """
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -29,13 +30,19 @@ from sglang.test.test_utils import (
 GSM_DATASET_PATH = None
 
 
-# Default server arguments shared across all tests
+# Allow overriding the speculative algorithm (e.g., NONE or NGRAM) via env var so
+# we can reuse this suite for baseline runs. Example:
+#     SUFFIX_TEST_SPEC_ALGO=NONE pytest test/srt/test_suffix_speculative_decoding.py::TestSuffixDecodingBase::test_gsm8k -v -s
+SPEC_ALGO_FOR_TEST = os.environ.get("SUFFIX_TEST_SPEC_ALGO", "SUFFIX").upper()
+IS_SUFFIX_MODE = SPEC_ALGO_FOR_TEST == "SUFFIX"
+
+# Default server arguments shared across all tests.
 DEFAULT_SERVER_ARGS = [
     "--trust-remote-code",
     "--cuda-graph-max-bs",
     "8",
     "--speculative-algorithm",
-    "SUFFIX",
+    SPEC_ALGO_FOR_TEST,
     "--speculative-num-draft-tokens",
     "16",
     "--mem-fraction-static",
@@ -50,6 +57,7 @@ class TestSuffixDecodingBase(CustomTestCase):
     base_url = DEFAULT_URL_FOR_TEST
     accuracy_threshold = 0.79
     spec_decode_threshold = 1.5  # Suffix decoding threshold (may vary from ngram)
+    is_suffix_mode = IS_SUFFIX_MODE
 
     @classmethod
     def get_server_args(cls):
@@ -93,13 +101,14 @@ class TestSuffixDecodingBase(CustomTestCase):
         metric_key = "accuracy"
         self.assertGreater(metrics[metric_key], self.accuracy_threshold)
 
-        # Validate speculative decoding performance
-        server_info = requests.get(self.base_url + "/get_server_info")
-        avg_spec_accept_length = server_info.json()["internal_states"][0][
-            "avg_spec_accept_length"
-        ]
-        print(f"{avg_spec_accept_length=}")
-        self.assertGreater(avg_spec_accept_length, self.spec_decode_threshold)
+        # Validate speculative decoding performance when running in suffix mode.
+        if self.is_suffix_mode:
+            server_info = requests.get(self.base_url + "/get_server_info")
+            avg_spec_accept_length = server_info.json()["internal_states"][0][
+                "avg_spec_accept_length"
+            ]
+            print(f"{avg_spec_accept_length=}")
+            self.assertGreater(avg_spec_accept_length, self.spec_decode_threshold)
 
 
 class TestSuffixDecodingTriton(TestSuffixDecodingBase):
