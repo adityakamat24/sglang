@@ -169,9 +169,13 @@ class SuffixCacheAdapter:
 
             # Pad or truncate to match draft_token_num
             original_draft_len = len(draft_ids)
-            if len(draft_ids) < self.draft_token_num:
+            if original_draft_len == 0:
+                # No speculation this round: return zeros with empty masks so the worker skips verify.
+                draft_ids = [0] * self.draft_token_num
+                draft_parents = [-1] * self.draft_token_num
+                logger.info("[BATCH_GET %d] No drafts from Arctic; returning zeroed tensors", idx)
+            elif len(draft_ids) < self.draft_token_num:
                 pad_len = self.draft_token_num - len(draft_ids)
-                # Pad with last token from the sequence (not zeros, to avoid KV cache corruption)
                 last_token = tokens[-1] if tokens else 0
                 draft_ids = draft_ids + [last_token] * pad_len
                 draft_parents = draft_parents + [-1] * pad_len
@@ -186,13 +190,13 @@ class SuffixCacheAdapter:
             # Build tree mask from parent structure
             # Token i can attend to token j if j is an ancestor of i
             mask = np.zeros((self.draft_token_num, self.draft_token_num), dtype=bool)
-            for i in range(self.draft_token_num):
-                mask[i, i] = True  # Self-attention
-                # Follow parent chain
-                parent_idx = draft_parents[i]
-                while parent_idx >= 0 and parent_idx < self.draft_token_num:
-                    mask[i, parent_idx] = True
-                    parent_idx = draft_parents[parent_idx]
+            if original_draft_len > 0:
+                for i in range(self.draft_token_num):
+                    mask[i, i] = True  # Self-attention
+                    parent_idx = draft_parents[i]
+                    while parent_idx >= 0 and parent_idx < self.draft_token_num:
+                        mask[i, parent_idx] = True
+                        parent_idx = draft_parents[parent_idx]
 
             all_masks.append(mask.flatten())
 
