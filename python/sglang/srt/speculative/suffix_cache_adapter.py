@@ -1,4 +1,4 @@
-"""
+""" 
 Cache adapter that wraps Arctic Inference SuffixDecodingCache
 to provide the same interface as NgramCache.
 
@@ -6,6 +6,7 @@ This allows NGRAMWorker to use suffix decoding without modification.
 """
 
 import logging
+import os
 from typing import List, Tuple
 
 import numpy as np
@@ -55,6 +56,9 @@ class SuffixCacheAdapter:
         self.max_tree_depth = max_tree_depth
         self.max_spec_factor = max_spec_factor
         self.min_token_prob = min_token_prob
+
+        # Debug toggles (set env e.g. SUFFIX_DEBUG_TREE=1 to dump first batch)
+        self.debug_tree_dump_remaining = int(os.environ.get("SUFFIX_DEBUG_TREE", "0"))
 
         # Track state by SGlang request ID (stable identifier)
         # Map: sglang_req_id → (arctic_req_id, last_length)
@@ -191,6 +195,20 @@ class SuffixCacheAdapter:
                     parent_idx = draft_parents[parent_idx]
 
             all_masks.append(mask.flatten())
+
+            if self.debug_tree_dump_remaining > 0:
+                logger.warning(
+                    "[SUFFIX DEBUG] req=%s, original_draft_len=%d, masked_len=%d, draft_ids=%s",
+                    sglang_req_id,
+                    original_draft_len,
+                    len(draft_ids),
+                    draft_ids,
+                )
+                logger.warning(
+                    "[SUFFIX DEBUG] mask=\n%s",
+                    mask.astype(int),
+                )
+                self.debug_tree_dump_remaining -= 1
 
         # Convert to numpy arrays (must be int64 for NGRAMWorker)
         req_drafts = np.array(all_drafts, dtype=np.int64)
