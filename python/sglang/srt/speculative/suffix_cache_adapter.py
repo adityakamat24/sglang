@@ -7,6 +7,7 @@ This allows NGRAMWorker to use suffix decoding without modification.
 
 import logging
 import os
+from collections import deque
 from typing import List, Tuple
 
 import numpy as np
@@ -175,8 +176,9 @@ class SuffixCacheAdapter:
             )
 
             # Convert to fixed-size arrays
-            draft_ids = draft.token_ids
-            draft_parents = draft.parents
+            draft_ids = list(draft.token_ids)
+            draft_parents = list(draft.parents)
+            draft_ids, draft_parents = self._reorder_tree_bfs(draft_ids, draft_parents)
 
             logger.info(
                 f"[BATCH_GET {idx}] Arctic returned {len(draft_ids)} drafts: {draft_ids[:8]}"
@@ -242,39 +244,12 @@ class SuffixCacheAdapter:
         No-op: cache updates now happen inside batch_get before speculation.
         Kept for interface compatibility with NGRAMWorker.
         """
-        for idx, (sglang_req_id, tokens) in enumerate(zip(batch_req_ids, batch_tokens)):
+        _ = batch_tokens  # Intentional placeholder to satisfy interface.
+        for idx, sglang_req_id in enumerate(batch_req_ids):
             if sglang_req_id not in self.req_state:
                 logger.error(
                     f"[BATCH_PUT {idx}] Called for unknown request {sglang_req_id}! "
                     f"This should not happen - batch_get must be called first."
-                )
-                continue
-
-            arctic_req_id, last_length = self.req_state[sglang_req_id]
-            current_length = len(tokens)
-
-            # Add new tokens to cache (for next iteration's batch_get)
-            if current_length > last_length:
-                new_tokens = tokens[last_length:current_length]
-                logger.info(
-                    f"[BATCH_PUT {idx}] Adding {len(new_tokens)} new tokens to cache: {new_tokens}"
-                )
-                if arctic_req_id in self.suffix_cache.active_requests:
-                    self.suffix_cache.add_active_response(arctic_req_id, new_tokens)
-                    # Update tracked length
-                    self.req_state[sglang_req_id][1] = current_length
-                else:
-                    logger.warning(
-                        f"[BATCH_PUT {idx}] Arctic req {arctic_req_id} not in active_requests! "
-                        f"Active: {self.suffix_cache.active_requests}"
-                    )
-            elif current_length == last_length:
-                logger.debug(
-                    f"[BATCH_PUT {idx}] No new tokens (length unchanged: {current_length})"
-                )
-            else:
-                logger.warning(
-                    f"[BATCH_PUT {idx}] Length decreased! current={current_length}, last={last_length}"
                 )
 
     def synchronize(self):
@@ -289,3 +264,67 @@ class SuffixCacheAdapter:
         # Clear tracking
         self.req_state.clear()
         logger.info("[SUFFIX ADAPTER] Cache reset")
+
+    def _reorder_tree_bfs(self, token_ids: List[int], parents: List[int]) -> Tuple[List[int], List[int]]:
+        """
+        Reorder the speculative tree so that every parent appears before its children.
+
+        NGRAMWorker expects draft nodes to be topologically sorted because
+        reconstruct_indices_from_tree_mask only scans columns < row when
+        computing ancestors. Arctic returns nodes in score order, so we enforce
+        a BFS order rooted at the original parents to satisfy that constraint.
+        """
+        n = len(token_ids)
+        if n <= 1:
+            return token_ids, parents
+
+        children: List[List[int]] = [[] for _ in range(n)]
+        roots: List[int] = []
+        for idx, parent in enumerate(parents):
+            if parent is None or parent < 0 or parent >= n:
+                roots.append(idx)
+            else:
+                children[parent].append(idx)
+
+        if not roots:
+            roots = [0]
+
+        order: List[int] = []
+        visited = [False] * n
+        for root in roots:
+            if visited[root]:
+                continue
+            queue = deque([root])
+            while queue:
+                node = queue.popleft()
+                if visited[node]:
+                    continue
+                visited[node] = True
+                order.append(node)
+                for child in children[node]:
+                    if not visited[child]:
+                        queue.append(child)
+
+        # Append any detached nodes (should not happen, but keep deterministic order).
+        for idx in range(n):
+            if not visited[idx]:
+                order.append(idx)
+
+        if order == list(range(n)):
+            return token_ids, parents
+
+        remap = {old_idx: new_idx for new_idx, old_idx in enumerate(order)}
+        reordered_ids = [token_ids[old_idx] for old_idx in order]
+        reordered_parents: List[int] = []
+        for old_idx in order:
+            parent = parents[old_idx]
+            if parent is None or parent < 0:
+                reordered_parents.append(-1)
+            else:
+                reordered_parents.append(remap.get(parent, -1))
+
+        logger.debug(
+            "[SUFFIX ADAPTER] Reordered draft tree (size=%d) to enforce parent-before-child ordering",
+            n,
+        )
+        return reordered_ids, reordered_parents
