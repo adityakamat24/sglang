@@ -201,7 +201,7 @@ class SuffixCacheAdapter:
 
             all_masks.append(mask.flatten())
 
-            if self.debug_tree_dump_remaining > 0:
+            if self.debug_tree_dump_remaining > 0 and original_draft_len > 0:
                 logger.warning(
                     "[SUFFIX DEBUG] req=%s, original_draft_len=%d, masked_len=%d, draft_ids=%s",
                     sglang_req_id,
