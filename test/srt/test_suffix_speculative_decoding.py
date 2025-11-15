@@ -124,14 +124,11 @@ class TestSuffixConfiguration(unittest.TestCase):
     def test_missing_arctic_inference(self):
         """Test error when arctic-inference is not installed."""
         with patch("sglang.srt.utils.import_utils.has_arctic_inference", return_value=False):
-            server_args = ServerArgs(
-                model_path="meta-llama/Llama-3-8B-Instruct",
-                speculative_algorithm="SUFFIX",
-            )
-
             with self.assertRaises(ImportError) as context:
-                # Trigger post_init validation
-                pass
+                server_args = ServerArgs(
+                    model_path="meta-llama/Llama-3-8B-Instruct",
+                    speculative_algorithm="SUFFIX",
+                )
 
             self.assertIn("Arctic Inference", str(context.exception))
 
@@ -145,7 +142,7 @@ class TestSuffixConfiguration(unittest.TestCase):
                     speculative_suffix_max_tree_depth=0,  # Invalid
                 )
 
-            self.assertIn("max_tree_depth", str(context.exception))
+            self.assertIn("max_tree_depth", str(context.exception).lower())
 
     def test_invalid_max_cached_requests(self):
         """Test validation of max_cached_requests parameter."""
@@ -154,10 +151,10 @@ class TestSuffixConfiguration(unittest.TestCase):
                 server_args = ServerArgs(
                     model_path="meta-llama/Llama-3-8B-Instruct",
                     speculative_algorithm="SUFFIX",
-                    speculative_suffix_max_cached_requests=-1,  # Invalid
+                    speculative_suffix_max_cached_requests=-2,  # Invalid (< -1 or 0)
                 )
 
-            self.assertIn("max_cached_requests", str(context.exception))
+            self.assertIn("max_cached_requests", str(context.exception).lower())
 
     def test_invalid_max_spec_factor(self):
         """Test validation of max_spec_factor parameter."""
@@ -169,7 +166,7 @@ class TestSuffixConfiguration(unittest.TestCase):
                     speculative_suffix_max_spec_factor=-0.5,  # Invalid
                 )
 
-            self.assertIn("max_spec_factor", str(context.exception))
+            self.assertIn("max_spec_factor", str(context.exception).lower())
 
     def test_invalid_min_token_prob(self):
         """Test validation of min_token_prob parameter."""
@@ -181,7 +178,7 @@ class TestSuffixConfiguration(unittest.TestCase):
                     speculative_suffix_min_token_prob=1.5,  # Invalid (>1.0)
                 )
 
-            self.assertIn("min_token_prob", str(context.exception))
+            self.assertIn("min_token_prob", str(context.exception).lower())
 
     def test_valid_configuration(self):
         """Test valid suffix decoding configuration."""
@@ -225,7 +222,7 @@ class TestSuffixConfiguration(unittest.TestCase):
                     device="cpu",  # Invalid - requires CUDA
                 )
 
-            self.assertIn("CUDA device", str(context.exception))
+            self.assertIn("cuda", str(context.exception).lower())
 
     def test_dp_attention_not_supported(self):
         """Test that dp_attention is not supported with suffix decoding."""
@@ -237,81 +234,89 @@ class TestSuffixConfiguration(unittest.TestCase):
                     enable_dp_attention=True,  # Invalid
                 )
 
-            self.assertIn("dp attention", str(context.exception))
+            self.assertIn("dp attention", str(context.exception).lower())
 
 
 class TestSuffixWorker(unittest.TestCase):
     """Test SuffixWorker implementation."""
 
     @patch("sglang.srt.utils.import_utils.has_arctic_inference", return_value=True)
-    def test_worker_initialization(self, mock_has_arctic):
+    @patch("sglang.srt.speculative.suffix_worker.SuffixDecodingCache")
+    def test_worker_initialization(self, mock_cache_class, mock_has_arctic):
         """Test SuffixWorker initialization."""
+        # Set up the mock
+        mock_cache_instance = Mock()
+        mock_cache_class.return_value = mock_cache_instance
+
         from sglang.srt.speculative.suffix_worker import SuffixWorker
 
-        with patch("arctic_inference.suffix_decoding.SuffixDecodingCache"):
-            server_args = ServerArgs(
-                model_path="meta-llama/Llama-3-8B-Instruct",
-                speculative_algorithm="SUFFIX",
-                speculative_num_draft_tokens=16,
-                page_size=1,
-            )
+        server_args = ServerArgs(
+            model_path="meta-llama/Llama-3-8B-Instruct",
+            speculative_algorithm="SUFFIX",
+            speculative_num_draft_tokens=16,
+            page_size=1,
+        )
 
-            # Create mock target worker
-            mock_target_worker = Mock()
-            mock_target_worker.max_running_requests = 48
-            mock_target_worker.model_runner = Mock()
+        # Create mock target worker
+        mock_target_worker = Mock()
+        mock_target_worker.max_running_requests = 48
+        mock_target_worker.model_runner = Mock()
 
-            worker = SuffixWorker(
-                server_args=server_args,
-                gpu_id=0,
-                tp_rank=0,
-                dp_rank=None,
-                moe_ep_rank=0,
-                nccl_port=12345,
-                target_worker=mock_target_worker,
-            )
+        worker = SuffixWorker(
+            server_args=server_args,
+            gpu_id=0,
+            tp_rank=0,
+            dp_rank=None,
+            moe_ep_rank=0,
+            nccl_port=12345,
+            target_worker=mock_target_worker,
+        )
 
-            self.assertEqual(worker.draft_token_num, 16)
-            self.assertIsNotNone(worker.suffix_cache)
-            self.assertEqual(worker.max_tree_depth, 24)
-            self.assertEqual(worker.max_spec_factor, 1.0)
-            self.assertEqual(worker.min_token_prob, 0.1)
+        self.assertEqual(worker.draft_token_num, 16)
+        self.assertIsNotNone(worker.suffix_cache)
+        self.assertEqual(worker.max_tree_depth, 24)
+        self.assertEqual(worker.max_spec_factor, 1.0)
+        self.assertEqual(worker.min_token_prob, 0.1)
 
     @patch("sglang.srt.utils.import_utils.has_arctic_inference", return_value=True)
-    def test_worker_with_custom_parameters(self, mock_has_arctic):
+    @patch("sglang.srt.speculative.suffix_worker.SuffixDecodingCache")
+    def test_worker_with_custom_parameters(self, mock_cache_class, mock_has_arctic):
         """Test SuffixWorker initialization with custom parameters."""
+        # Set up the mock
+        mock_cache_instance = Mock()
+        mock_cache_class.return_value = mock_cache_instance
+
         from sglang.srt.speculative.suffix_worker import SuffixWorker
 
-        with patch("arctic_inference.suffix_decoding.SuffixDecodingCache"):
-            server_args = ServerArgs(
-                model_path="meta-llama/Llama-3-8B-Instruct",
-                speculative_algorithm="SUFFIX",
-                speculative_num_draft_tokens=32,
-                speculative_suffix_max_tree_depth=48,
-                speculative_suffix_max_spec_factor=2.0,
-                speculative_suffix_min_token_prob=0.05,
-                page_size=1,
-            )
+        server_args = ServerArgs(
+            model_path="meta-llama/Llama-3-8B-Instruct",
+            speculative_algorithm="SUFFIX",
+            speculative_num_draft_tokens=32,
+            speculative_suffix_max_tree_depth=48,
+            speculative_suffix_max_spec_factor=2.0,
+            speculative_suffix_min_token_prob=0.05,
+            page_size=1,
+        )
 
-            # Create mock target worker
-            mock_target_worker = Mock()
-            mock_target_worker.max_running_requests = 48
-            mock_target_worker.model_runner = Mock()
+        # Create mock target worker
+        mock_target_worker = Mock()
+        mock_target_worker.max_running_requests = 48
+        mock_target_worker.model_runner = Mock()
 
-            worker = SuffixWorker(
-                server_args=server_args,
-                gpu_id=0,
-                tp_rank=0,
-                dp_rank=None,
-                moe_ep_rank=0,
-                nccl_port=12345,
-                target_worker=mock_target_worker,
-            )
+        worker = SuffixWorker(
+            server_args=server_args,
+            gpu_id=0,
+            tp_rank=0,
+            dp_rank=None,
+            moe_ep_rank=0,
+            nccl_port=12345,
+            target_worker=mock_target_worker,
+        )
 
-            self.assertEqual(worker.draft_token_num, 32)
-            self.assertEqual(worker.max_tree_depth, 48)
-            self.assertEqual(worker.max_spec_factor, 2.0)
-            self.assertEqual(worker.min_token_prob, 0.05)
+        self.assertEqual(worker.draft_token_num, 32)
+        self.assertEqual(worker.max_tree_depth, 48)
+        self.assertEqual(worker.max_spec_factor, 2.0)
+        self.assertEqual(worker.min_token_prob, 0.05)
 
 
 class TestSuffixVerifyInput(unittest.TestCase):

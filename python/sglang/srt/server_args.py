@@ -1705,9 +1705,9 @@ class ServerArgs:
                     f"speculative_suffix_max_tree_depth={self.speculative_suffix_max_tree_depth} must be >= 1"
                 )
 
-            if self.speculative_suffix_max_cached_requests < 0:
+            if self.speculative_suffix_max_cached_requests < -1:
                 raise ValueError(
-                    f"speculative_suffix_max_cached_requests={self.speculative_suffix_max_cached_requests} must be >= 0"
+                    f"speculative_suffix_max_cached_requests={self.speculative_suffix_max_cached_requests} must be >= -1 (use -1 for unlimited)"
                 )
 
             if self.speculative_suffix_max_spec_factor < 0:
