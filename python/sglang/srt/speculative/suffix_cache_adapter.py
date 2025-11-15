@@ -242,7 +242,7 @@ class SuffixCacheAdapter:
         No-op: cache updates now happen inside batch_get before speculation.
         Kept for interface compatibility with NGRAMWorker.
         """
-        for idx, sglang_req_id in enumerate(batch_req_ids):
+        for idx, (sglang_req_id, tokens) in enumerate(zip(batch_req_ids, batch_tokens)):
             if sglang_req_id not in self.req_state:
                 logger.error(
                     f"[BATCH_PUT {idx}] Called for unknown request {sglang_req_id}! "
