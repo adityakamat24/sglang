@@ -175,10 +175,12 @@ class SuffixVerifyInput(SpecInput):
         # Iterate every accepted token and check if req has finished after append the token
         # should be checked BEFORE free kv cache slots
         for i, (req, accept_index_row) in enumerate(zip(batch.reqs, accept_index_cpu)):
+            accepted_tokens = []
             for j, idx in enumerate(accept_index_row):
                 if idx == -1:
                     break
                 id = predict_cpu[idx]
+                accepted_tokens.append(id)
                 req.output_ids.append(id)
                 req.check_finished()
                 if req.finished():
@@ -197,6 +199,8 @@ class SuffixVerifyInput(SpecInput):
                                 f"{self.predict=}\n"
                             )
                             raise e
+            if accepted_tokens:
+                logger.info(f"[DEBUG SUFFIX VERIFY] req={req.rid}: Accepted {len(accepted_tokens)} tokens: {accepted_tokens[:10]}")
             req.spec_verify_ct += 1
         if has_finished:
             self.accept_length = (self.accept_index != -1).sum(dim=1) - 1
