@@ -174,16 +174,17 @@ class SuffixCacheAdapter:
                 draft_ids = [0] * self.draft_token_num
                 draft_parents = [-1] * self.draft_token_num
                 logger.info("[BATCH_GET %d] No drafts from Arctic; returning zeroed tensors", idx)
-            elif len(draft_ids) < self.draft_token_num:
-                pad_len = self.draft_token_num - len(draft_ids)
+            elif original_draft_len < self.draft_token_num:
+                pad_len = self.draft_token_num - original_draft_len
                 last_token = tokens[-1] if tokens else 0
                 draft_ids = draft_ids + [last_token] * pad_len
                 draft_parents = draft_parents + [-1] * pad_len
                 logger.info(f"[BATCH_GET {idx}] Padded with {pad_len} copies of token {last_token}")
-            elif len(draft_ids) > self.draft_token_num:
+            elif original_draft_len > self.draft_token_num:
                 draft_ids = draft_ids[: self.draft_token_num]
                 draft_parents = draft_parents[: self.draft_token_num]
                 logger.info(f"[BATCH_GET {idx}] Truncated from {original_draft_len} to {self.draft_token_num}")
+                original_draft_len = self.draft_token_num
 
             all_drafts.extend(draft_ids)
 
@@ -191,7 +192,7 @@ class SuffixCacheAdapter:
             # Token i can attend to token j if j is an ancestor of i
             mask = np.zeros((self.draft_token_num, self.draft_token_num), dtype=bool)
             if original_draft_len > 0:
-                for i in range(self.draft_token_num):
+                for i in range(original_draft_len):
                     mask[i, i] = True  # Self-attention
                     parent_idx = draft_parents[i]
                     while parent_idx >= 0 and parent_idx < self.draft_token_num:
