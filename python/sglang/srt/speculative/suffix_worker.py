@@ -183,6 +183,16 @@ class SuffixWorker:
                 # Initialize tracking for this request
                 self.cached_output_lens[req_id] = 0
 
+            # Add the most recently sampled token to cache BEFORE speculation
+            # This ensures speculation uses the most up-to-date cache
+            current_output_len = len(req.output_ids)
+            cached_len = self.cached_output_lens.get(req_id, 0)
+            if current_output_len > cached_len:
+                new_tokens = req.output_ids[cached_len:current_output_len]
+                if new_tokens:
+                    self.suffix_cache.add_active_response(req_id, new_tokens)
+                    self.cached_output_lens[req_id] = current_output_len
+
             # Extract pattern from the end of the input
             start = max(0, num_tokens - self.max_tree_depth)
             pattern = current_tokens[start:num_tokens]
@@ -397,26 +407,10 @@ class SuffixWorker:
 
     def _update_suffix_cache(self, batch: ScheduleBatch):
         """Update suffix cache with accepted tokens after verification."""
-        for req in batch.reqs:
-            req_id = str(req.rid)
-
-            # Skip if request is not in cache
-            if req_id not in self.suffix_cache.active_requests:
-                continue
-
-            # Get current number of output tokens
-            current_output_len = len(req.output_ids)
-
-            # Get number of tokens we've already added to cache
-            cached_len = self.cached_output_lens.get(req_id, 0)
-
-            # Add only the NEW tokens that were just verified
-            if current_output_len > cached_len:
-                new_tokens = req.output_ids[cached_len:current_output_len]
-                if new_tokens:
-                    self.suffix_cache.add_active_response(req_id, new_tokens)
-                    # Update tracking
-                    self.cached_output_lens[req_id] = current_output_len
+        # NOTE: Cache is now updated in _prepare_draft_tokens BEFORE speculation
+        # to match vLLM's implementation and ensure speculation uses up-to-date cache.
+        # This method is kept for compatibility but does nothing.
+        pass
 
     def forward_batch_generation(
         self, batch: ScheduleBatch
