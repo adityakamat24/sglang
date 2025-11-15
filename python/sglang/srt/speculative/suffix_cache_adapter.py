@@ -138,8 +138,23 @@ class SuffixCacheAdapter:
         for idx, (sglang_req_id, prompt, tokens) in enumerate(zip(batch_req_ids, batch_prompts, batch_tokens)):
             arctic_req_id, last_length = self._get_or_create_arctic_req_id(sglang_req_id, prompt, tokens)
 
+            # Ensure cache includes the latest verified tokens before speculation.
+            current_length = len(tokens)
+            if current_length > last_length:
+                new_tokens = tokens[last_length:current_length]
+                logger.info(
+                    f"[BATCH_GET {idx}] Adding {len(new_tokens)} new tokens before speculate: {new_tokens}"
+                )
+                if arctic_req_id in self.suffix_cache.active_requests:
+                    self.suffix_cache.add_active_response(arctic_req_id, new_tokens)
+                    self.req_state[sglang_req_id][1] = current_length
+                    last_length = current_length
+                else:
+                    logger.warning(
+                        f"[BATCH_GET {idx}] Arctic req {arctic_req_id} not active when updating!"
+                    )
+
             # Extract pattern from end of tokens (up to max_tree_depth)
-            # Note: Cache should already be updated from previous batch_put() call
             pattern_start = max(0, len(tokens) - self.max_tree_depth)
             pattern = tokens[pattern_start:]
 
@@ -224,18 +239,11 @@ class SuffixCacheAdapter:
 
     def batch_put(self, batch_req_ids: List[str], batch_tokens: List[List[int]]):
         """
-        Update cache with verified tokens (matching ngram pattern).
-
-        This is called AFTER verification. We update the cache with newly verified tokens
-        so they're available for the NEXT iteration's batch_get() call.
-
-        Args:
-            batch_req_ids: List of SGlang request IDs (stable)
-            batch_tokens: List of token sequences after verification
+        No-op: cache updates now happen inside batch_get before speculation.
+        Kept for interface compatibility with NGRAMWorker.
         """
-        for idx, (sglang_req_id, tokens) in enumerate(zip(batch_req_ids, batch_tokens)):
+        for idx, sglang_req_id in enumerate(batch_req_ids):
             if sglang_req_id not in self.req_state:
-                # This shouldn't happen (batch_get should have been called first)
                 logger.error(
                     f"[BATCH_PUT {idx}] Called for unknown request {sglang_req_id}! "
                     f"This should not happen - batch_get must be called first."
