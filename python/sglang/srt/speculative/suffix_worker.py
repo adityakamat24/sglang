@@ -64,6 +64,9 @@ class SuffixWorker:
         self.max_batch_size = target_worker.max_running_requests
         self.device = f"cuda:{gpu_id}" if gpu_id >= 0 else "cuda"
 
+        # Track how many tokens we've added to cache for each request
+        self.cached_output_lens = {}
+
         self._init_preallocated_tensors()
 
         # Initialize Arctic Inference cache
@@ -84,6 +87,8 @@ class SuffixWorker:
         # Arctic Inference doesn't have a reset method, but we can clear active requests
         for req_id in list(self.suffix_cache.active_requests):
             self.suffix_cache.stop_request(req_id)
+        # Clear tracking dictionary
+        self.cached_output_lens.clear()
 
     def _efficient_concat_last_n(self, seq1: List[int], seq2: List[int], n: int):
         """Efficiently concatenate last n elements from two sequences."""
@@ -175,11 +180,8 @@ class SuffixWorker:
 
                 # Start a new request with prompt tokens
                 self.suffix_cache.start_request(req_id, req.origin_input_ids)
-
-            # Add output tokens to suffix cache (if any)
-            if len(req.output_ids) > 0:
-                # Add the most recent output token
-                self.suffix_cache.add_active_response(req_id, [req.output_ids[-1]])
+                # Initialize tracking for this request
+                self.cached_output_lens[req_id] = 0
 
             # Extract pattern from the end of the input
             start = max(0, num_tokens - self.max_tree_depth)
@@ -240,6 +242,8 @@ class SuffixWorker:
         active_req_ids = {str(req.rid) for req in batch.reqs}
         for req_id in list(self.suffix_cache.active_requests - active_req_ids):
             self.suffix_cache.stop_request(req_id)
+            # Clean up tracking for stopped requests
+            self.cached_output_lens.pop(req_id, None)
 
         total_draft_token_num = len(req_drafts)
         assert (
@@ -392,10 +396,27 @@ class SuffixWorker:
                 pt += 1
 
     def _update_suffix_cache(self, batch: ScheduleBatch):
-        """Update suffix cache with accepted tokens."""
-        # Arctic Inference handles cache updates internally during add_active_response
-        # No explicit batch_put needed like in NGRAMWorker
-        pass
+        """Update suffix cache with accepted tokens after verification."""
+        for req in batch.reqs:
+            req_id = str(req.rid)
+
+            # Skip if request is not in cache
+            if req_id not in self.suffix_cache.active_requests:
+                continue
+
+            # Get current number of output tokens
+            current_output_len = len(req.output_ids)
+
+            # Get number of tokens we've already added to cache
+            cached_len = self.cached_output_lens.get(req_id, 0)
+
+            # Add only the NEW tokens that were just verified
+            if current_output_len > cached_len:
+                new_tokens = req.output_ids[cached_len:current_output_len]
+                if new_tokens:
+                    self.suffix_cache.add_active_response(req_id, new_tokens)
+                    # Update tracking
+                    self.cached_output_lens[req_id] = current_output_len
 
     def forward_batch_generation(
         self, batch: ScheduleBatch
