@@ -180,27 +180,28 @@ class SuffixCacheAdapter:
             draft_parents = list(draft.parents)
             draft_ids, draft_parents = self._reorder_tree_bfs(draft_ids, draft_parents)
 
+            context_token = tokens[-1] if tokens else 0
+            draft_ids, draft_parents = self._inject_root_node(draft_ids, draft_parents, context_token)
+
             logger.info(
-                f"[BATCH_GET {idx}] Arctic returned {len(draft_ids)} drafts: {draft_ids[:8]}"
+                f"[BATCH_GET {idx}] Arctic returned {max(0, len(draft_ids) - 1)} drafts (excl. root)"
             )
 
-            # Pad or truncate to match draft_token_num
+            # Pad or truncate to match draft_token_num (includes root node at index 0)
             original_draft_len = len(draft_ids)
-            if original_draft_len == 0:
-                # No speculation this round: return zeros with empty masks so the worker skips verify.
-                draft_ids = [0] * self.draft_token_num
-                draft_parents = [-1] * self.draft_token_num
-                logger.info("[BATCH_GET %d] No drafts from Arctic; returning zeroed tensors", idx)
-            elif original_draft_len < self.draft_token_num:
+            if original_draft_len == 1:
+                logger.info(f"[BATCH_GET {idx}] No suffix drafts available for this step (root only)")
+            if original_draft_len < self.draft_token_num:
                 pad_len = self.draft_token_num - original_draft_len
-                last_token = tokens[-1] if tokens else 0
-                draft_ids = draft_ids + [last_token] * pad_len
-                draft_parents = draft_parents + [-1] * pad_len
-                logger.info(f"[BATCH_GET {idx}] Padded with {pad_len} copies of token {last_token}")
+                draft_ids.extend([0] * pad_len)
+                draft_parents.extend([0] * pad_len)
+                logger.info(f"[BATCH_GET {idx}] Padded with {pad_len} zero tokens attached to root")
             elif original_draft_len > self.draft_token_num:
                 draft_ids = draft_ids[: self.draft_token_num]
                 draft_parents = draft_parents[: self.draft_token_num]
-                logger.info(f"[BATCH_GET {idx}] Truncated from {original_draft_len} to {self.draft_token_num}")
+                logger.info(
+                    f"[BATCH_GET {idx}] Truncated tree (with root) from {original_draft_len} to {self.draft_token_num}"
+                )
                 original_draft_len = self.draft_token_num
 
             all_drafts.extend(draft_ids)
@@ -328,3 +329,25 @@ class SuffixCacheAdapter:
             n,
         )
         return reordered_ids, reordered_parents
+
+    def _inject_root_node(
+        self, token_ids: List[int], parents: List[int], context_token: int
+    ) -> Tuple[List[int], List[int]]:
+        """
+        Insert a synthetic root node (the latest verified token) to mimic NGRAM cache layout.
+
+        NGRAMWorker assumes index 0 always points to the already-verified token that new drafts
+        branch from. We prepend that context token and shift all parent indices accordingly.
+        """
+        if context_token is None:
+            context_token = 0
+
+        rooted_ids = [context_token]
+        rooted_parents = [-1]
+        for parent_idx in parents:
+            if parent_idx is None or parent_idx < 0:
+                rooted_parents.append(0)
+            else:
+                rooted_parents.append(parent_idx + 1)
+        rooted_ids.extend(token_ids)
+        return rooted_ids, rooted_parents
