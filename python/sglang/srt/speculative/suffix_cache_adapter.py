@@ -33,6 +33,7 @@ class SuffixCacheAdapter:
     def __init__(
         self,
         draft_token_num: int,
+        max_batch_size: int,
         max_tree_depth: int = 24,
         max_cached_requests: int = 10000,
         max_spec_factor: float = 1.0,
@@ -54,6 +55,7 @@ class SuffixCacheAdapter:
             max_cached_requests=max_cached_requests,
         )
         self.draft_token_num = draft_token_num
+        self.max_batch_size = max_batch_size
         self.max_tree_depth = max_tree_depth
         self.max_spec_factor = max_spec_factor
         self.min_token_prob = min_token_prob
@@ -64,6 +66,14 @@ class SuffixCacheAdapter:
         # Track state by SGlang request ID (stable identifier)
         # Map: sglang_req_id → (arctic_req_id, last_length)
         self.req_state = {}
+
+        # Preallocate buffers to avoid per-step allocations
+        self.max_total_drafts = self.max_batch_size * self.draft_token_num
+        self.draft_buffer = np.empty((self.max_total_drafts,), dtype=np.int64)
+        self.mask_buffer = np.empty(
+            (self.max_batch_size, self.draft_token_num, self.draft_token_num),
+            dtype=bool,
+        )
 
     def _cleanup_inactive_requests(self, active_req_ids: set[str]):
         """Stop backend requests that are no longer active in SGlang."""
@@ -116,8 +126,19 @@ class SuffixCacheAdapter:
             - draft_tokens: np.ndarray of shape (batch_size * draft_token_num,)
             - tree_mask: np.ndarray of shape (batch_size * draft_token_num * draft_token_num,)
         """
-        all_drafts = []
-        all_masks = []
+        batch_size = len(batch_req_ids)
+        if batch_size == 0:
+            return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=bool)
+
+        if batch_size > self.max_batch_size:
+            raise ValueError(
+                f"Batch size {batch_size} exceeds configured max_batch_size={self.max_batch_size}"
+            )
+
+        total_draft_tokens = batch_size * self.draft_token_num
+        draft_view = self.draft_buffer[:total_draft_tokens]
+        mask_view = self.mask_buffer[:batch_size]
+        mask_view.fill(False)
 
         active_req_ids = set(batch_req_ids)
         self._cleanup_inactive_requests(active_req_ids)
@@ -170,11 +191,13 @@ class SuffixCacheAdapter:
                 draft_parents = draft_parents[: self.draft_token_num]
                 original_draft_len = self.draft_token_num
 
-            all_drafts.extend(draft_ids)
+            start = idx * self.draft_token_num
+            end = start + self.draft_token_num
+            draft_view[start:end] = draft_ids
 
             # Build tree mask from parent structure
             # Token i can attend to token j if j is an ancestor of i
-            mask = np.zeros((self.draft_token_num, self.draft_token_num), dtype=bool)
+            mask = mask_view[idx]
             if original_draft_len > 0:
                 for i in range(original_draft_len):
                     mask[i, i] = True  # Self-attention
@@ -182,8 +205,6 @@ class SuffixCacheAdapter:
                     while parent_idx >= 0 and parent_idx < self.draft_token_num:
                         mask[i, parent_idx] = True
                         parent_idx = draft_parents[parent_idx]
-
-            all_masks.append(mask.flatten())
 
             if self.debug_tree_dump_remaining > 0 and original_draft_len > 0:
                 logger.warning(
@@ -199,11 +220,9 @@ class SuffixCacheAdapter:
                 )
                 self.debug_tree_dump_remaining -= 1
 
-        # Convert to numpy arrays (must be int64 for NGRAMWorker)
-        req_drafts = np.array(all_drafts, dtype=np.int64)
-        tree_mask = np.concatenate(all_masks)
+        tree_mask = mask_view.reshape(-1)[: total_draft_tokens * self.draft_token_num]
 
-        return req_drafts, tree_mask
+        return draft_view, tree_mask
 
     def batch_put(self, batch_req_ids: List[str], batch_tokens: List[List[int]]):
         """

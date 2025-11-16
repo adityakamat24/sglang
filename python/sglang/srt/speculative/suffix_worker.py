@@ -58,6 +58,7 @@ class SuffixWorker(NGRAMWorker):
         try:
             self.ngram_cache = SuffixCacheAdapter(
                 draft_token_num=server_args.speculative_num_draft_tokens,
+                max_batch_size=self.max_batch_size,
                 max_tree_depth=server_args.speculative_suffix_max_tree_depth,
                 max_cached_requests=server_args.speculative_suffix_max_cached_requests,
                 max_spec_factor=server_args.speculative_suffix_max_spec_factor,
