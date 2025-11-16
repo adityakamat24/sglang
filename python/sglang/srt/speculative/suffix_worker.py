@@ -74,7 +74,7 @@ class SuffixWorker(NGRAMWorker):
         """
         Override to pass FULL token sequences to the cache adapter.
 
-        NGRAMWorker passes only last N tokens, but Arctic needs:
+        NGRAMWorker passes only last N tokens, but the suffix cache needs:
         1. Full prompt for start_request()
         2. Full sequence for suffix tree building
         3. Request identity tracking
@@ -90,7 +90,7 @@ class SuffixWorker(NGRAMWorker):
         for req in batch.reqs:
             # Pass request ID for stable tracking
             batch_req_ids.append(req.rid)
-            # Pass prompt separately (for Arctic initialization)
+            # Pass prompt separately (for cache initialization)
             batch_prompts.append(req.origin_input_ids)
             # Pass FULL token sequence (prompt + outputs), not just last N
             full_tokens = req.origin_input_ids + req.output_ids
